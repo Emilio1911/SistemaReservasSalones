@@ -1,148 +1,173 @@
-﻿// SQLiteDataAccess.cs
-using Dapper;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Data.SQLite;
-using System.Linq;
+using System.IO;
+using System.Windows.Forms;
 
 namespace SistemaReservasSalones
 {
     public class SQLiteDataAccess
     {
-        // Método para obtener la cadena de conexión a la base de datos SQLite
-        private static string LoadConnectionString()
+        private readonly string _connectionString;
+        private const string DatabaseFile = "ReservasDB.sqlite";
+
+        public SQLiteDataAccess()
         {
-            return "Data Source=./ReservasDB.db;Version=3;";
+            _connectionString = $"Data Source={DatabaseFile};Version=3;FailIfMissing=False;";
+            InitializeDatabase();
         }
 
-        // Método para cargar todas las reservas desde la base de datos
-        public List<Reservation> LoadReservations()
+        public void InitializeDatabase()
         {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
+            if (!File.Exists(DatabaseFile))
             {
-                var output = cnn.Query<Reservation>("select Id, NumeroNota, Salon, Fecha, HoraInicio, HoraFin, Solicitante, Contacto, Motivo, FechaRegistro from Reservas", new DynamicParameters());
-                return output.ToList();
-            }
-        }
-
-        // MÉTODO FALTANTE: Cargar reservas para un salón y fecha específicos
-        public List<Reservation> LoadReservationsForSalonAndDate(string salon, string fecha)
-        {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
-            {
-                var output = cnn.Query<Reservation>(
-                    "select Id, NumeroNota, Salon, Fecha, HoraInicio, HoraFin, Solicitante, Contacto, Motivo, FechaRegistro from Reservas where Salon = @Salon and Fecha = @Fecha", 
-                    new { Salon = salon, Fecha = fecha });
-                return output.ToList();
-            }
-        }
-
-        // MÉTODO FALTANTE: Verificar si un horario está ocupado
-        public bool IsReservationTimeSlotBooked(string salon, string fecha, string horaInicio, string horaFin)
-        {
-            try
-            {
-                // Convertir las horas a TimeSpan para comparación
-                if (!TimeSpan.TryParse(horaInicio, out TimeSpan inicioTime) || 
-                    !TimeSpan.TryParse(horaFin, out TimeSpan finTime))
+                SQLiteConnection.CreateFile(DatabaseFile);
+                using (var conn = new SQLiteConnection(_connectionString))
                 {
-                    return false; // Si no se pueden parsear las horas, asumimos que no hay conflicto
+                    conn.Open();
+                    new SQLiteCommand(@"
+                        CREATE TABLE Reservas (
+                            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            NumeroNota TEXT NOT NULL UNIQUE,
+                            Salon TEXT NOT NULL,
+                            Fecha TEXT NOT NULL,
+                            HoraInicio TEXT NOT NULL,
+                            HoraFin TEXT NOT NULL,
+                            Solicitante TEXT NOT NULL,
+                            Contacto TEXT,
+                            Motivo TEXT,
+                            FechaRegistro TEXT NOT NULL
+                        )", conn).ExecuteNonQuery();
                 }
+            }
+        }
 
-                var reservasExistentes = LoadReservationsForSalonAndDate(salon, fecha);
-
-                foreach (var reserva in reservasExistentes)
+        public bool IsTimeSlotAvailable(string salon, string fecha, string horaInicio, string horaFin, string excluirNumeroNota = null)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SQLiteCommand(@"
+                    SELECT COUNT(*) FROM Reservas 
+                    WHERE Salon = @Salon AND Fecha = @Fecha
+                    AND (HoraInicio < @HoraFin AND HoraFin > @HoraInicio)
+                    AND (@ExcluirNumeroNota IS NULL OR NumeroNota != @ExcluirNumeroNota)", conn))
                 {
-                    if (TimeSpan.TryParse(reserva.HoraInicio, out TimeSpan reservaInicio) &&
-                        TimeSpan.TryParse(reserva.HoraFin, out TimeSpan reservaFin))
+                    cmd.Parameters.AddWithValue("@Salon", salon);
+                    cmd.Parameters.AddWithValue("@Fecha", fecha);
+                    cmd.Parameters.AddWithValue("@HoraInicio", horaInicio);
+                    cmd.Parameters.AddWithValue("@HoraFin", horaFin);
+                    cmd.Parameters.AddWithValue("@ExcluirNumeroNota", excluirNumeroNota ?? (object)DBNull.Value);
+                    return Convert.ToInt32(cmd.ExecuteScalar()) == 0;
+                }
+            }
+        }
+
+        public bool CreateReservation(Reservation reserva)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SQLiteCommand(@"
+                    INSERT INTO Reservas (
+                        NumeroNota, Salon, Fecha, HoraInicio, HoraFin,
+                        Solicitante, Contacto, Motivo, FechaRegistro
+                    ) VALUES (
+                        @NumeroNota, @Salon, @Fecha, @HoraInicio, @HoraFin,
+                        @Solicitante, @Contacto, @Motivo, @FechaRegistro
+                    )", conn))
+                {
+                    cmd.Parameters.AddWithValue("@NumeroNota", reserva.NumeroNota);
+                    cmd.Parameters.AddWithValue("@Salon", reserva.Salon);
+                    cmd.Parameters.AddWithValue("@Fecha", reserva.Fecha);
+                    cmd.Parameters.AddWithValue("@HoraInicio", reserva.HoraInicio);
+                    cmd.Parameters.AddWithValue("@HoraFin", reserva.HoraFin);
+                    cmd.Parameters.AddWithValue("@Solicitante", reserva.Solicitante);
+                    cmd.Parameters.AddWithValue("@Contacto", reserva.Contacto ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@Motivo", reserva.Motivo ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@FechaRegistro", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                    return cmd.ExecuteNonQuery() > 0;
+                }
+            }
+        }
+
+        public List<Reservation> LoadReservations(string salon = null)
+        {
+            var reservas = new List<Reservation>();
+            using (var conn = new SQLiteConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = new SQLiteCommand(
+                    salon == null
+                        ? "SELECT * FROM Reservas ORDER BY Fecha, HoraInicio"
+                        : "SELECT * FROM Reservas WHERE Salon = @Salon ORDER BY Fecha, HoraInicio", conn))
+                {
+                    if (salon != null) cmd.Parameters.AddWithValue("@Salon", salon);
+                    using (var reader = cmd.ExecuteReader())
                     {
-                        // Verificar si hay superposición de horarios
-                        // No hay superposición si: finTime <= reservaInicio OR inicioTime >= reservaFin
-                        // Hay superposición si: !(finTime <= reservaInicio OR inicioTime >= reservaFin)
-                        if (!(finTime <= reservaInicio || inicioTime >= reservaFin))
+                        while (reader.Read())
                         {
-                            return true; // Hay conflicto de horario
+                            reservas.Add(new Reservation
+                            {
+                                Id = Convert.ToInt32(reader["Id"]),
+                                NumeroNota = reader["NumeroNota"].ToString(),
+                                Salon = reader["Salon"].ToString(),
+                                Fecha = reader["Fecha"].ToString(),
+                                HoraInicio = reader["HoraInicio"].ToString(),
+                                HoraFin = reader["HoraFin"].ToString(),
+                                Solicitante = reader["Solicitante"].ToString(),
+                                Contacto = reader["Contacto"] == DBNull.Value ? null : reader["Contacto"].ToString(),
+                                Motivo = reader["Motivo"] == DBNull.Value ? null : reader["Motivo"].ToString(),
+                                FechaRegistro = reader["FechaRegistro"].ToString()
+                            });
                         }
                     }
                 }
-
-                return false; // No hay conflicto
             }
-            catch (Exception)
+            return reservas;
+        }
+
+        public bool DeleteReservation(string numeroNota)
+        {
+            using (var conn = new SQLiteConnection(_connectionString))
             {
-                return false; // En caso de error, asumimos que no hay conflicto
+                conn.Open();
+                using (var cmd = new SQLiteCommand("DELETE FROM Reservas WHERE NumeroNota = @NumeroNota", conn))
+                {
+                    cmd.Parameters.AddWithValue("@NumeroNota", numeroNota);
+                    return cmd.ExecuteNonQuery() > 0;
+                }
             }
         }
 
-        // Método para guardar una nueva reserva en la base de datos
-        public void SaveReservation(Reservation reservation)
+        public bool UpdateReservation(string numeroNotaOriginal, Reservation reserva)
         {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
+            using (var conn = new SQLiteConnection(_connectionString))
             {
-                cnn.Execute("insert into Reservas (NumeroNota, Salon, Fecha, HoraInicio, HoraFin, Solicitante, Contacto, Motivo, FechaRegistro) " +
-                           "values (@NumeroNota, @Salon, @Fecha, @HoraInicio, @HoraFin, @Solicitante, @Contacto, @Motivo, @FechaRegistro)", reservation);
-            }
-        }
-
-        // MÉTODO FALTANTE: Actualizar una reserva existente
-        public void UpdateReservation(string numeroNotaOriginal, Reservation reservation)
-        {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
-            {
-                cnn.Execute(@"UPDATE Reservas 
-                             SET NumeroNota = @NumeroNota, 
-                                 Salon = @Salon, 
-                                 Fecha = @Fecha, 
-                                 HoraInicio = @HoraInicio, 
-                                 HoraFin = @HoraFin, 
-                                 Solicitante = @Solicitante, 
-                                 Contacto = @Contacto, 
-                                 Motivo = @Motivo 
-                             WHERE NumeroNota = @NumeroNotaOriginal", 
-                           new 
-                           {
-                               NumeroNota = reservation.NumeroNota,
-                               Salon = reservation.Salon,
-                               Fecha = reservation.Fecha,
-                               HoraInicio = reservation.HoraInicio,
-                               HoraFin = reservation.HoraFin,
-                               Solicitante = reservation.Solicitante,
-                               Contacto = reservation.Contacto,
-                               Motivo = reservation.Motivo,
-                               NumeroNotaOriginal = numeroNotaOriginal
-                           });
-            }
-        }
-
-        // Método para eliminar una reserva por su Id
-        public void DeleteReservation(int id)
-        {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
-            {
-                cnn.Execute("delete from Reservas where Id = @Id", new { Id = id });
-            }
-        }
-
-        // Método para inicializar la base de datos (crear la tabla 'Reservas' si no existe)
-        public void InitializeDatabase()
-        {
-            using (IDbConnection cnn = new SQLiteConnection(LoadConnectionString()))
-            {
-                string createTableSql = @"
-                CREATE TABLE IF NOT EXISTS Reservas (
-                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    NumeroNota TEXT NOT NULL,
-                    Salon TEXT NOT NULL,
-                    Fecha TEXT NOT NULL,
-                    HoraInicio TEXT NOT NULL,
-                    HoraFin TEXT NOT NULL,
-                    Solicitante TEXT NOT NULL,
-                    Contacto TEXT NOT NULL,
-                    Motivo TEXT NOT NULL,
-                    FechaRegistro TEXT NOT NULL
-                );";
-                cnn.Execute(createTableSql);
+                conn.Open();
+                using (var cmd = new SQLiteCommand(@"
+                    UPDATE Reservas SET
+                        NumeroNota = @NumeroNota,
+                        Salon = @Salon,
+                        Fecha = @Fecha,
+                        HoraInicio = @HoraInicio,
+                        HoraFin = @HoraFin,
+                        Solicitante = @Solicitante,
+                        Contacto = @Contacto,
+                        Motivo = @Motivo
+                    WHERE NumeroNota = @NumeroNotaOriginal", conn))
+                {
+                    cmd.Parameters.AddWithValue("@NumeroNota", reserva.NumeroNota);
+                    cmd.Parameters.AddWithValue("@Salon", reserva.Salon);
+                    cmd.Parameters.AddWithValue("@Fecha", reserva.Fecha);
+                    cmd.Parameters.AddWithValue("@HoraInicio", reserva.HoraInicio);
+                    cmd.Parameters.AddWithValue("@HoraFin", reserva.HoraFin);
+                    cmd.Parameters.AddWithValue("@Solicitante", reserva.Solicitante);
+                    cmd.Parameters.AddWithValue("@Contacto", reserva.Contacto ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@Motivo", reserva.Motivo ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@NumeroNotaOriginal", numeroNotaOriginal);
+                    return cmd.ExecuteNonQuery() > 0;
+                }
             }
         }
     }

@@ -1,12 +1,4 @@
-﻿// FrmPrincipal.cs
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System;
 using System.Windows.Forms;
 
 namespace SistemaReservasSalones
@@ -16,49 +8,60 @@ namespace SistemaReservasSalones
         public FrmPrincipal()
         {
             InitializeComponent();
+            ConfigureButtons();
         }
 
-        private void FrmPrincipal_Load(object sender, EventArgs e)
+        private void ConfigureButtons()
         {
-            // Puedes agregar aquí cualquier lógica de inicialización para el formulario principal.
+            // Configuración visual de botones (opcional)
+            btnPolideportivo.Tag = "POLIDEPORTIVO";
+            btnSum.Tag = "SUM";
         }
 
-        private void GestionarReservas_Click(object sender, EventArgs e) // <<<< ESTE MÉTODO
+        private void GestionarReservas_Click(object sender, EventArgs e)
         {
-            GestionReservasForm gestionForm = new GestionReservasForm();
-            gestionForm.ShowDialog();
+            OpenFormWithDispose<GestionReservasForm>();
         }
 
-        // Método general para Realizar Reserva (si lo usas para algún otro botón)
         private void RealizarReserva_Click(object sender, EventArgs e)
         {
-            using (var reservaForm = new ReservaForm())
-            {
-                reservaForm.ShowDialog();
-            }
+            OpenFormWithDispose<ReservaForm>();
         }
 
-        // NUEVO MÉTODO para el botón Polideportivo
         private void btnPolideportivo_Click(object sender, EventArgs e)
         {
-            using (var reservaForm = new ReservaForm("POLIDEPORTIVO")) // Abre con "POLIDEPORTIVO" preseleccionado
-            {
-                reservaForm.ShowDialog();
-            }
+            OpenFormWithDispose<ReservaForm>("POLIDEPORTIVO");
         }
 
-        // NUEVO MÉTODO para el botón SUM
         private void btnSum_Click(object sender, EventArgs e)
         {
-            using (var reservaForm = new ReservaForm("SUM")) // Abre con "SUM" preseleccionado
+            OpenFormWithDispose<ReservaForm>("SUM");
+        }
+
+        private void btnSalir_Click(object sender, EventArgs e)
+        {
+            if (ConfirmExit())
             {
-                reservaForm.ShowDialog();
+                Application.Exit();
             }
         }
 
-        private void btnSalir_Click(object sender, EventArgs e) // <<<< ESTE MÉTODO
+        // Método genérico para abrir formularios
+        private void OpenFormWithDispose<T>(string salon = null) where T : Form, new()
         {
-            Application.Exit(); // Cierra toda la aplicación
+            using (var form = salon == null ? new T() : (T)Activator.CreateInstance(typeof(T), salon))
+            {
+                form.ShowDialog();
+            }
+        }
+
+        // Método para confirmar salida
+        private bool ConfirmExit()
+        {
+            return MessageBox.Show("¿Está seguro que desea salir?", 
+                                "Confirmar salida", 
+                                MessageBoxButtons.YesNo, 
+                                MessageBoxIcon.Question) == DialogResult.Yes;
         }
     }
 }

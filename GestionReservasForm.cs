@@ -208,7 +208,7 @@ namespace SistemaReservasSalones
                         {
                             if (row.DataBoundItem is Reservation reservationToDelete)
                             {
-                                _db.DeleteReservation(reservationToDelete.Id);
+                                _db.DeleteReservation(reservationToDelete.NumeroNota);
                             }
                         }
 
